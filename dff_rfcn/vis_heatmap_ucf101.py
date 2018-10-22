@@ -50,7 +50,7 @@ def main():
     # get symbol
     pprint.pprint(config)
     config.symbol = 'resnet_v1_101_flownet_rfcn_ucf101'
-    model = '/home/weik/Documents/Deep-Feature-Flow/output/dff_rfcn/imagenet_vid/resnet_v1_101_flownet_imagenet_vid_rfcn_end2end_ohem/DET_train_30classes_VID_train_15frames/dff_rfcn_vid'
+    model = '/data/DFF_MODEL/dff_rfcn_vid'
     sym_instance = eval(config.symbol + '.' + config.symbol)()
 
     vis_sym = sym_instance.get_cam_test_symbol(config)
@@ -61,62 +61,74 @@ def main():
     num_classes = len(classes)
 
     # load demo data
-    image_names = glob.glob('/data_ssd2/datasets/UCF101/JPG/PlayingSitar/v_PlayingSitar_g03_c05/*.jpg')
-    output_dir = cur_path + '/../demo/ucf101/'
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    video_names = []
+    for label_item in classes:
+        video_names.append('v_{0}_g01_c01'.format(label_item))
 
-    #
-    data = []
-    key_im_tensor = None
-    for idx, im_name in enumerate(image_names):
-        assert os.path.exists(im_name), ('%s does not exist'.format(im_name))
-        im = cv2.imread(im_name, cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
-        target_size = config.SCALES[0][0]
-        max_size = config.SCALES[0][1]
-        im, im_scale = resize(im, target_size, max_size, stride=config.network.IMAGE_STRIDE)
-        im_tensor = transform(im, config.network.PIXEL_MEANS)
+    video_name = "v_ApplyEyeMakeup_g01_c01"
+    for video_idx, video_name in enumerate(video_names):
+        if video_idx < 36:
+            continue
+        image_names = glob.glob('/data_ssd2/datasets/UCF101/JPG/{0}/{1}/*.jpg'.format(video_name.split('_')[1], video_name))
 
-        data.append({'data': im_tensor})
+        output_dir = cur_path + '/../demo/ucf101/' + video_name + '/'
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
 
-    # get predictor
-    data_names = ['data']
-    label_names = []
-    data = [[mx.nd.array(data[i][name]) for name in data_names] for i in xrange(len(data))]
+        #
+        data = []
+        key_im_tensor = None
+        for idx, im_name in enumerate(image_names):
+            assert os.path.exists(im_name), ('%s does not exist'.format(im_name))
+            im = cv2.imread(im_name, cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
+            target_size = config.SCALES[0][0]
+            max_size = config.SCALES[0][1]
+            im, im_scale = resize(im, target_size, max_size, stride=config.network.IMAGE_STRIDE)
+            im_tensor = transform(im, config.network.PIXEL_MEANS)
 
-    max_data_shape = [('data', (1, 3, 240, 320))]
-    provide_data = [[(k, v.shape) for k, v in zip(data_names, data[i])] for i in xrange(len(data))]
-    provide_label = [None for i in xrange(len(data))]
-    arg_params, aux_params = load_param(model, 2, process=True)
-    weight = arg_params['cam_fc_weights']
-    key_predictor = Predictor(vis_sym, data_names, label_names,
-                          context=[mx.gpu(0)], max_data_shapes=[max_data_shape],
-                          provide_data=provide_data, provide_label=provide_label,
-                          arg_params=arg_params, aux_params=aux_params)
+            data.append({'data': im_tensor})
 
-    # test
-    time = 0
-    count = 0
-    for idx, im_name in enumerate(image_names):
-        data_batch = mx.io.DataBatch(data=[data[idx]], label=[], pad=0, index=idx,
-                                     provide_data=[[(k, v.shape) for k, v in zip(data_names, data[idx])]],
-                                     provide_label=[None])
+        # get predictor
+        data_names = ['data']
+        label_names = []
+        data = [[mx.nd.array(data[i][name]) for name in data_names] for i in xrange(len(data))]
 
-        out  = key_predictor.predict(data_batch)[0]
+        max_data_shape = [('data', (1, 3, 240, 320))]
+        provide_data = [[(k, v.shape) for k, v in zip(data_names, data[i])] for i in xrange(len(data))]
+        provide_label = [None for i in xrange(len(data))]
+        arg_params, aux_params = load_param(model, 2, process=True)
+        weight = arg_params['cam_fc_weights']
+        key_predictor = Predictor(vis_sym, data_names, label_names,
+                              context=[mx.gpu(0)], max_data_shapes=[max_data_shape],
+                              provide_data=provide_data, provide_label=provide_label,
+                              arg_params=arg_params, aux_params=aux_params)
 
-        cam_resnet = out['cam_fc_output']
-        conv_3x3 = out['cam_conv_3x3_relu_output']
+        # test
+        print(video_idx)
+        with open(output_dir + 'prediction.txt', 'w') as f:
 
-        # visualize
-        im = cv2.imread(im_name)
-        im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
+            for idx, im_name in enumerate(image_names):
+                data_batch = mx.io.DataBatch(data=[data[idx]], label=[], pad=0, index=idx,
+                                             provide_data=[[(k, v.shape) for k, v in zip(data_names, data[idx])]],
+                                             provide_label=[None])
 
-        heat_map = heat_map_generate(conv_3x3, weight, np.argmax(cam_resnet.asnumpy()))
+                out  = key_predictor.predict(data_batch)[0]
 
-        # show_heatmap
-        out_im = draw_heatmap(im, heat_map)
-        _, filename = os.path.split(im_name)
-        cv2.imwrite(output_dir + filename,out_im)
+                cam_resnet = out['cam_fc_output']
+                prediction = np.argmax(cam_resnet.asnumpy())
+                #print('GT: {0} <---> Predict: {1}'.format(video_name.split('_')[1], classes[prediction]))
+                conv_3x3 = out['cam_conv_3x3_relu_output']
+
+                # visualize
+                im = cv2.imread(im_name)
+                im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
+                heat_map = heat_map_generate(conv_3x3, weight, prediction)
+                # show_heatmap
+                out_im = draw_heatmap(im, heat_map)
+                _, filename = os.path.split(im_name)
+                cv2.imwrite(output_dir + filename,out_im)
+
+                f.write(classes[prediction] + '\n')
 
     print 'done'
 
